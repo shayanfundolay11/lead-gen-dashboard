@@ -19,6 +19,28 @@ export default function LeadDetail() {
   const [logProposal, setLogProposal] = useState(false);
   const [logCallbackDate, setLogCallbackDate] = useState('');
   const [saving, setSaving] = useState(false);
+  const [auditing, setAuditing] = useState(false);
+
+  async function handleRunAudit() {
+    setAuditing(true);
+    try {
+      const res = await fetch('/api/seo-audit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert('Audit failed: ' + (data.error || 'unknown error'));
+      } else {
+        setLead(prev => ({ ...prev, seo_audit: data.audit, seo_audit_at: data.audit.checkedAt }));
+      }
+    } catch (e) {
+      alert('Audit request failed: ' + e.message);
+    } finally {
+      setAuditing(false);
+    }
+  }
 
   async function loadCalls() {
     const { data: callData } = await supabase.from('calls').select('*').eq('lead_id', id).order('created_at', { ascending: false });
@@ -171,6 +193,50 @@ export default function LeadDetail() {
         )}
       </div>
 
+      {lead.website && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>SEO / website audit</h2>
+            <button className="call-btn" style={{ background: 'var(--indigo)' }} onClick={handleRunAudit} disabled={auditing}>
+              {auditing ? 'Checking...' : lead.seo_audit ? 'Re-run audit' : 'Run audit'}
+            </button>
+          </div>
+
+          {lead.seo_audit ? (
+            <div className="panel" style={{ marginBottom: 24 }}>
+              <p className="sub" style={{ marginBottom: 12 }}>Checked {new Date(lead.seo_audit_at).toLocaleString()}</p>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div>
+                  <AuditRow label="Page title" ok={lead.seo_audit.onPage?.hasTitle} detail={lead.seo_audit.onPage?.titleText} />
+                  <AuditRow label="Meta description" ok={lead.seo_audit.onPage?.hasMetaDescription} detail={lead.seo_audit.onPage?.metaDescriptionText} />
+                  <AuditRow label="Mobile-friendly tag" ok={lead.seo_audit.onPage?.hasViewport} />
+                  <AuditRow label="HTTPS (secure)" ok={lead.seo_audit.onPage?.isHttps} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginBottom: 6, fontWeight: 500 }}>MOBILE PAGE SPEED SCORE</div>
+                  {lead.seo_audit.pageSpeed?.available ? (
+                    <>
+                      <div className="mono" style={{ fontSize: 32, fontWeight: 600, marginBottom: 8, color: lead.seo_audit.pageSpeed.performanceScore >= 70 ? 'var(--teal)' : lead.seo_audit.pageSpeed.performanceScore >= 40 ? 'var(--amber)' : 'var(--rose)' }}>
+                        {lead.seo_audit.pageSpeed.performanceScore}/100
+                      </div>
+                      {lead.seo_audit.pageSpeed.topIssues?.length > 0 && (
+                        <ul style={{ fontSize: 12, color: 'var(--ink-secondary)', paddingLeft: 16, margin: 0 }}>
+                          {lead.seo_audit.pageSpeed.topIssues.map((issue, i) => <li key={i} style={{ marginBottom: 4 }}>{issue}</li>)}
+                        </ul>
+                      )}
+                    </>
+                  ) : (
+                    <p style={{ fontSize: 12, color: 'var(--ink-muted)' }}>Not available ({lead.seo_audit.pageSpeed?.error || 'unknown reason'})</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="empty" style={{ marginBottom: 24 }}>No audit run yet. Click "Run audit" to check their website.</div>
+          )}
+        </>
+      )}
+
       <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Suggested pitch script</h2>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 24 }}>
         <div className="panel">
@@ -252,3 +318,13 @@ export default function LeadDetail() {
 
 const labelStyle = { display: 'block', fontSize: 12, color: 'var(--ink-muted)', marginBottom: 4, fontWeight: 500 };
 const fieldStyle = { width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
+
+function AuditRow({ label, ok, detail }) {
+  return (
+    <div style={{ marginBottom: 10, fontSize: 13 }}>
+      <span className={`badge ${ok ? 'b-positive' : 'b-negative'}`} style={{ marginRight: 8 }}>{ok ? 'OK' : 'Missing'}</span>
+      <span style={{ fontWeight: 500 }}>{label}</span>
+      {detail && <div style={{ fontSize: 11.5, color: 'var(--ink-muted)', marginTop: 2, marginLeft: 2 }}>{detail}</div>}
+    </div>
+  );
+}

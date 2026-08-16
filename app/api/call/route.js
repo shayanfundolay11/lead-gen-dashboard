@@ -1,67 +1,64 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-
-async function checkOnPageSignals(url) {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
-    const html = await res.text();
-
-    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
-    const metaDescMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i);
-    const hasViewport = /<meta[^>]+name=["']viewport["']/i.test(html);
-
-    return {
-      hasTitle: Boolean(titleMatch && titleMatch[1].trim()),
-      titleText: titleMatch ? titleMatch[1].trim() : null,
-      hasMetaDescription: Boolean(metaDescMatch && metaDescMatch[1].trim()),
-      metaDescriptionText: metaDescMatch ? metaDescMatch[1].trim() : null,
-      hasViewport,
-      isHttps: url.startsWith('https://'),
-      reachable: true,
-    };
-  } catch {
-    return { reachable: false, hasTitle: false, hasMetaDescription: false, hasViewport: false, isHttps: url.startsWith('https://') };
-  }
-}
-
-async function checkPageSpeed(url, apiKey) {
-  try {
-    const params = new URLSearchParams({ url, key: apiKey, strategy: 'mobile', category: 'performance' });
-    const res = await fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?${params.toString()}`, { signal: AbortSignal.timeout(15000) });
-    const data = await res.json();
-    if (!data.lighthouseResult) return { available: false, error: data.error?.message || 'PageSpeed Insights API not enabled or query failed' };
-
-    const score = Math.round((data.lighthouseResult.categories?.performance?.score || 0) * 100);
-    const audits = data.lighthouseResult.audits || {};
-    const topIssues = Object.values(audits)
-      .filter(a => a.score !== null && a.score < 0.5 && a.title)
-      .slice(0, 4)
-      .map(a => a.title);
-
-    return { available: true, performanceScore: score, topIssues };
-  } catch (e) {
-    return { available: false, error: e.message };
-  }
-}
+// Server-side Supabase client (safe to use service-level logic here, this file never runs in the browser)
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+);
 
 export async function POST(req) {
-  const { leadId } = await req.json();
-  const apiKey = process.env.GOOGLE_API_KEY;
+  const { leadId, phone } = await req.json();
 
-  const { data: lead } = await supabase.from('leads').select('website').eq('id', leadId).single();
-  if (!lead?.website) {
-    return Response.json({ error: 'This lead has no website to audit' }, { status: 400 });
+  if (!phone) {
+    return Response.json({ error: 'This lead has no phone number' }, { status: 400 });
+  }
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE_NUMBER) {
+    return Response.json({ error: 'Twilio is not configured yet (Part 3 of setup) — add TWILIO_* env vars first' }, { status: 500 });
+  }
+  if (!process.env.VOICE_AGENT_BASE_URL) {
+    return Response.json({ error: 'Voice agent server URL is not configured yet (Part 3 of setup)' }, { status: 500 });
   }
 
-  const [onPage, pageSpeed] = await Promise.all([
-    checkOnPageSignals(lead.website),
-    checkPageSpeed(lead.website, apiKey),
-  ]);
+  // Create the call row first so the dashboard shows "Calling..." immediately
+  const { data: callRow, error: callInsertError } = await supabase
+    .from('calls')
+    .insert({ lead_id: leadId, status: 'calling', called_at: new Date().toISOString() })
+    .select()
+    .single();
 
-  const audit = { onPage, pageSpeed, checkedAt: new Date().toISOString() };
+  if (callInsertError) {
+    return Response.json({ error: callInsertError.message }, { status: 500 });
+  }
 
-  await supabase.from('leads').update({ seo_audit: audit, seo_audit_at: audit.checkedAt }).eq('id', leadId);
+  // Ask Twilio to place the call. Twilio will then request TwiML from the voice-agent
+  // server, which connects the call to a live media stream for the AI conversation.
+  const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Calls.json`;
+  const auth = Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64');
 
-  return Response.json({ audit });
+  const params = new URLSearchParams({
+    To: phone,
+    From: process.env.TWILIO_PHONE_NUMBER,
+    Url: `${process.env.VOICE_AGENT_BASE_URL}/twiml?callRowId=${callRow.id}&leadId=${leadId}`,
+    StatusCallback: `${req.nextUrl.origin}/api/call-webhook`,
+    StatusCallbackEvent: 'completed',
+  });
+
+  try {
+    const twilioRes = await fetch(twilioUrl, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    });
+    const twilioData = await twilioRes.json();
+
+    if (!twilioRes.ok) {
+      await supabase.from('calls').update({ status: 'failed' }).eq('id', callRow.id);
+      return Response.json({ error: twilioData.message || 'Twilio call failed' }, { status: 500 });
+    }
+
+    return Response.json({ success: true, callSid: twilioData.sid, callRowId: callRow.id });
+  } catch (e) {
+    await supabase.from('calls').update({ status: 'failed' }).eq('id', callRow.id);
+    return Response.json({ error: e.message }, { status: 500 });
+  }
 }
