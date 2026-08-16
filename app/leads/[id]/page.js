@@ -5,11 +5,13 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '../../../lib/supabaseClient';
 import { generatePitchScript } from '../../../lib/generatePitch';
+import { applyTemplate } from '../../../lib/templates';
 
 export default function LeadDetail() {
   const { id } = useParams();
   const [lead, setLead] = useState(null);
   const [calls, setCalls] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [calling, setCalling] = useState(false);
 
@@ -51,6 +53,8 @@ export default function LeadDetail() {
     async function load() {
       const { data: leadData } = await supabase.from('leads').select('*').eq('id', id).single();
       setLead(leadData);
+      const { data: templateData } = await supabase.from('templates').select('*');
+      setTemplates(templateData || []);
       await loadCalls();
       setLoading(false);
     }
@@ -69,8 +73,6 @@ export default function LeadDetail() {
       called_at: new Date().toISOString(),
     });
 
-    // Auto-advance the lead's overall status based on the outcome, and set a
-    // reminder date if a callback was requested — this is what feeds "Today's follow-ups".
     const newLeadStatus = logOutcome === 'positive' ? 'meeting_fixed'
       : logOutcome === 'callback_requested' ? 'contacted'
       : logOutcome === 'not_interested' ? 'not_interested'
@@ -125,11 +127,24 @@ export default function LeadDetail() {
   if (loading) return <div className="page"><div className="empty">Loading...</div></div>;
   if (!lead) return <div className="page"><div className="empty">Lead not found.</div></div>;
 
-  const pitch = generatePitchScript(lead);
+  // Prefer templates from the database (editable via the Templates page) — fall back
+  // to the hardcoded defaults only if no matching template exists yet.
+  function getPitch(channel, language) {
+    const tmpl = templates.find(t => t.pitch_type === lead.pitch_type && t.channel === channel && t.language === language);
+    if (tmpl) return applyTemplate(tmpl.body, lead);
+    const fallback = generatePitchScript(lead);
+    return language === 'ur' ? fallback.ur : fallback.en;
+  }
+
+  const pitchEn = getPitch('call', 'en');
+  const pitchUr = getPitch('call', 'ur');
+  const whatsappText = getPitch('whatsapp', 'en');
+  const emailTemplate = templates.find(t => t.pitch_type === lead.pitch_type && t.channel === 'email' && t.language === 'en');
+  const emailBody = emailTemplate ? applyTemplate(emailTemplate.body, lead) : pitchEn;
 
   return (
     <div className="page">
-      <Link href="/" style={{ fontSize: 13, color: '#2a78d6', textDecoration: 'none' }}>&larr; Back to dashboard</Link>
+      <Link href="/" style={{ fontSize: 13, color: 'var(--indigo)', textDecoration: 'none' }}>&larr; Back to dashboard</Link>
 
       <h1 style={{ marginTop: 12 }}>{lead.business_name}</h1>
       <p className="sub">{lead.keyword_matched} &middot; {lead.city ? `${lead.city}, ` : ''}{lead.country}</p>
@@ -163,7 +178,7 @@ export default function LeadDetail() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 10, marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
         <button className="call-btn" disabled={!lead.phone || calling} onClick={handleCall}>
           {calling ? 'Starting call...' : 'Call now'}
         </button>
@@ -171,7 +186,7 @@ export default function LeadDetail() {
           <a
             className="call-btn"
             style={{ background: '#25D366', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
-            href={`https://wa.me/${lead.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(pitch.en)}`}
+            href={`https://wa.me/${lead.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(whatsappText)}`}
             target="_blank" rel="noreferrer"
           >
             WhatsApp
@@ -181,7 +196,7 @@ export default function LeadDetail() {
           <a
             className="call-btn"
             style={{ background: '#5b32a8', textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}
-            href={`mailto:${lead.email}?subject=${encodeURIComponent(`Regarding ${lead.business_name}'s online presence`)}&body=${encodeURIComponent(pitch.en)}`}
+            href={`mailto:${lead.email}?subject=${encodeURIComponent(`Regarding ${lead.business_name}'s online presence`)}&body=${encodeURIComponent(emailBody)}`}
           >
             Email this pitch
           </a>
@@ -244,15 +259,18 @@ export default function LeadDetail() {
         </>
       )}
 
-      <h2 style={{ fontSize: 15, fontWeight: 600, marginBottom: 10 }}>Suggested pitch script</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>Suggested pitch script</h2>
+        <Link href="/templates" style={{ fontSize: 12, color: 'var(--indigo)', textDecoration: 'none' }}>Edit templates &rarr;</Link>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 24 }}>
         <div className="panel">
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 500 }}>ENGLISH</div>
-          <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{pitch.en}</p>
+          <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginBottom: 8, fontWeight: 500 }}>ENGLISH</div>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{pitchEn}</p>
         </div>
         <div className="panel">
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, fontWeight: 500 }}>URDU</div>
-          <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{pitch.ur}</p>
+          <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginBottom: 8, fontWeight: 500 }}>URDU</div>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: 0 }}>{pitchUr}</p>
         </div>
       </div>
 
