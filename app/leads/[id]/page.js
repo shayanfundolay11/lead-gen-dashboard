@@ -208,9 +208,16 @@ export default function LeadDetail() {
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
                 <div>
                   <AuditRow label="Page title" ok={lead.seo_audit.onPage?.hasTitle} detail={lead.seo_audit.onPage?.titleText} />
+                  <AuditRow label="Title length (ideal 30–65 chars)" ok={lead.seo_audit.onPage?.titleLengthOk} />
                   <AuditRow label="Meta description" ok={lead.seo_audit.onPage?.hasMetaDescription} detail={lead.seo_audit.onPage?.metaDescriptionText} />
+                  <AuditRow label="Description length (ideal 70–165 chars)" ok={lead.seo_audit.onPage?.metaDescriptionLengthOk} />
                   <AuditRow label="Mobile-friendly tag" ok={lead.seo_audit.onPage?.hasViewport} />
                   <AuditRow label="HTTPS (secure)" ok={lead.seo_audit.onPage?.isHttps} />
+                  <AuditRow label="Exactly one H1 heading" ok={lead.seo_audit.onPage?.h1Count === 1} detail={lead.seo_audit.onPage?.h1Count != null ? `${lead.seo_audit.onPage.h1Count} found` : null} />
+                  <AuditRow label="Social sharing tags (Open Graph)" ok={lead.seo_audit.onPage?.hasOpenGraph} />
+                  <AuditRow label="Image alt text coverage" ok={lead.seo_audit.onPage?.imgAltRatio >= 80} detail={lead.seo_audit.onPage?.imgAltRatio != null ? `${lead.seo_audit.onPage.imgAltRatio}% of images have alt text` : 'No images found'} />
+                  <AuditRow label="sitemap.xml present" ok={lead.seo_audit.onPage?.hasSitemap} />
+                  <AuditRow label="robots.txt present" ok={lead.seo_audit.onPage?.hasRobots} />
                 </div>
                 <div>
                   <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginBottom: 6, fontWeight: 500 }}>MOBILE PAGE SPEED SCORE</div>
