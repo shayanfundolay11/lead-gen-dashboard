@@ -127,11 +127,18 @@ export default function LeadDetail() {
   if (loading) return <div className="page"><div className="empty">Loading...</div></div>;
   if (!lead) return <div className="page"><div className="empty">Lead not found.</div></div>;
 
-  // Prefer templates from the database (editable via the Templates page) — fall back
-  // to the hardcoded defaults only if no matching template exists yet.
+  // Each lead's id deterministically picks a variation — so this lead always shows the
+  // same script on repeat visits, but different leads get different wording for variety.
+  function leadSeed() {
+    return String(lead.id).split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+  }
+
   function getPitch(channel, language) {
-    const tmpl = templates.find(t => t.pitch_type === lead.pitch_type && t.channel === channel && t.language === language);
-    if (tmpl) return applyTemplate(tmpl.body, lead);
+    const matches = templates.filter(t => t.pitch_type === lead.pitch_type && t.channel === channel && t.language === language);
+    if (matches.length > 0) {
+      const chosen = matches[leadSeed() % matches.length];
+      return applyTemplate(chosen.body, lead);
+    }
     const fallback = generatePitchScript(lead);
     return language === 'ur' ? fallback.ur : fallback.en;
   }
@@ -139,8 +146,8 @@ export default function LeadDetail() {
   const pitchEn = getPitch('call', 'en');
   const pitchUr = getPitch('call', 'ur');
   const whatsappText = getPitch('whatsapp', 'en');
-  const emailTemplate = templates.find(t => t.pitch_type === lead.pitch_type && t.channel === 'email' && t.language === 'en');
-  const emailBody = emailTemplate ? applyTemplate(emailTemplate.body, lead) : pitchEn;
+  const emailMatches = templates.filter(t => t.pitch_type === lead.pitch_type && t.channel === 'email' && t.language === 'en');
+  const emailBody = emailMatches.length > 0 ? applyTemplate(emailMatches[leadSeed() % emailMatches.length].body, lead) : pitchEn;
 
   return (
     <div className="page">
