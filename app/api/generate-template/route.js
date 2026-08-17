@@ -30,14 +30,17 @@ Reply with ONLY the new script text, nothing else — no preamble, no quotes, no
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-sonnet-5',
         max_tokens: 300,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
     const data = await res.json();
+    if (!res.ok) {
+      return Response.json({ error: data.error?.message || `Claude API error (${res.status})` }, { status: 500 });
+    }
     const text = data.content?.[0]?.text?.trim();
-    if (!text) return Response.json({ error: 'No response from Claude' }, { status: 500 });
+    if (!text) return Response.json({ error: 'Claude returned an empty response' }, { status: 500 });
     return Response.json({ text });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
