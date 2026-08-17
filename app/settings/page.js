@@ -17,6 +17,12 @@ const INTEGRATIONS = [
     envVar: 'NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY',
   },
   {
+    key: 'anthropic', name: 'Anthropic (Claude)',
+    desc: 'Generates new pitch template variations on the Templates page.',
+    configureUrl: 'https://console.anthropic.com',
+    envVar: 'ANTHROPIC_API_KEY',
+  },
+  {
     key: 'twilio', name: 'Twilio',
     desc: 'Places the actual outbound AI phone calls.',
     configureUrl: 'https://console.twilio.com',
