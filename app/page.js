@@ -1,167 +1,288 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
-import { INDUSTRIES } from '../../lib/industries';
-import { COUNTRIES } from '../../lib/countries';
-import AutocompleteInput from '../../components/AutocompleteInput';
+import { Search as SearchIcon, PhoneCall, Download, UserPlus, MessageCircle, Clock } from 'lucide-react';
+import { supabase } from '../lib/supabaseClient';
+import { exportToCsv } from '../lib/exportCsv';
 
-const PLATFORMS = [
-  { key: 'google', label: 'Google Maps' },
+const SOURCES = [
+  { key: 'google', label: 'Google' },
   { key: 'linkedin', label: 'LinkedIn' },
   { key: 'facebook', label: 'Facebook' },
   { key: 'instagram', label: 'Instagram' },
   { key: 'tiktok', label: 'TikTok' },
 ];
 
-export default function FindLeads() {
-  const [platform, setPlatform] = useState('google');
-  const [industry, setIndustry] = useState('restaurant');
-  const [customIndustry, setCustomIndustry] = useState('');
-  const [countryName, setCountryName] = useState('Pakistan');
-  const [city, setCity] = useState('');
-  const [area, setArea] = useState('');
-  const [radiusKm, setRadiusKm] = useState(10);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
-  const [error, setError] = useState(null);
+const STATUS_LABELS = {
+  new: 'New', contacted: 'Contacted', meeting_fixed: 'Meeting fixed', closed: 'Closed', not_interested: 'Not interested',
+};
 
-  const countryCode = COUNTRIES.find(c => c.name === countryName)?.code || '';
-  const isGoogle = platform === 'google';
+export default function Dashboard() {
+  const [activeSource, setActiveSource] = useState('google');
+  const [counts, setCounts] = useState({});
+  const [leads, setLeads] = useState([]);
+  const [todayTasks, setTodayTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [callingId, setCallingId] = useState(null);
 
-  async function handleFindLeads() {
+  const [search, setSearch] = useState('');
+  const [pitchFilter, setPitchFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [sortBy, setSortBy] = useState('created_at');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const loadCounts = useCallback(async () => {
+    const results = {};
+    for (const s of SOURCES) {
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('source', s.key);
+      results[s.key] = count || 0;
+    }
+    setCounts(results);
+  }, []);
+
+  const loadLeads = useCallback(async (source) => {
     setLoading(true);
-    setError(null);
-    setResult(null);
-    const industryValue = industry === 'other' ? customIndustry : INDUSTRIES.find(i => i.id === industry)?.label || industry;
-    try {
-      const endpoint = isGoogle ? '/api/find-leads' : '/api/find-social-leads';
-      const body = isGoogle
-        ? { industry: industry === 'other' ? customIndustry : industry, country: countryName, city, area, radiusKm }
-        : { platform, industry: industryValue, country: countryName, city };
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*, calls(status, outcome, called_at, scheduled_callback_at)')
+      .eq('source', source)
+      .order('created_at', { ascending: false });
 
-      const res = await fetch(endpoint, {
+    if (!error && data) {
+      const withLatestCall = data.map(lead => {
+        const sortedCalls = (lead.calls || []).sort((a, b) => new Date(b.called_at || 0) - new Date(a.called_at || 0));
+        return { ...lead, latestCall: sortedCalls[0] || null };
+      });
+      setLeads(withLatestCall);
+    }
+    setLoading(false);
+  }, []);
+
+  const loadTodayTasks = useCallback(async () => {
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    const { data } = await supabase
+      .from('leads')
+      .select('*')
+      .not('next_action_at', 'is', null)
+      .lte('next_action_at', endOfToday.toISOString())
+      .order('next_action_at', { ascending: true });
+    setTodayTasks(data || []);
+  }, []);
+
+  useEffect(() => { loadCounts(); loadTodayTasks(); }, [loadCounts, loadTodayTasks]);
+  useEffect(() => { loadLeads(activeSource); }, [activeSource, loadLeads]);
+
+  async function handleCall(lead) {
+    setCallingId(lead.id);
+    try {
+      const res = await fetch('/api/call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ leadId: lead.id, phone: lead.phone }),
       });
-      const data = await res.json();
       if (!res.ok) {
-        setError(data.error || 'Something went wrong');
-      } else {
-        setResult(data);
+        const err = await res.json();
+        alert('Call could not start: ' + (err.error || 'unknown error'));
       }
+      await loadLeads(activeSource);
     } catch (e) {
-      setError(e.message);
+      alert('Call request failed: ' + e.message);
     } finally {
-      setLoading(false);
+      setCallingId(null);
     }
   }
 
+  async function handleStatusChange(lead, newStatus) {
+    await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
+    setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status: newStatus } : l));
+  }
+
+  function whatsappLink(lead) {
+    if (!lead.phone) return null;
+    const digits = lead.phone.replace(/[^\d+]/g, '');
+    const text = `Assalam-o-Alaikum, ${lead.business_name} se baat ho rahi hai? Main ek digital agency se contact kar raha hoon.`;
+    return `https://wa.me/${digits.replace('+', '')}?text=${encodeURIComponent(text)}`;
+  }
+
+  function statusBadge(lead) {
+    const call = lead.latestCall;
+    if (!call) return <span className="badge b-pending">Not called</span>;
+    if (call.status === 'calling') return <span className="badge b-calling">Calling...</span>;
+    if (call.outcome === 'positive') return <span className="badge b-positive">Positive</span>;
+    if (call.outcome === 'negative') return <span className="badge b-negative">Negative</span>;
+    if (call.outcome === 'callback_requested') return <span className="badge b-callback">Callback requested</span>;
+    return <span className="badge b-completed">Completed</span>;
+  }
+
+  function gapBadge(pitchType) {
+    const cls = pitchType === 'Website pitch' ? 'b-signal-badge'
+      : pitchType === 'SEO / reach pitch' ? 'b-amber-badge' : 'b-indigo-badge';
+    return <span className={`badge ${cls}`}>{pitchType}</span>;
+  }
+
+  const pitchOptions = useMemo(() => [...new Set(leads.map(l => l.pitch_type).filter(Boolean))], [leads]);
+
+  const filteredLeads = useMemo(() => {
+    let result = leads.filter(l => {
+      const matchesSearch = !search || l.business_name.toLowerCase().includes(search.toLowerCase());
+      const matchesPitch = !pitchFilter || l.pitch_type === pitchFilter;
+      const status = l.latestCall ? (l.latestCall.outcome || l.latestCall.status) : 'not_called';
+      const matchesStatus = !statusFilter || status === statusFilter;
+      return matchesSearch && matchesPitch && matchesStatus;
+    });
+
+    result.sort((a, b) => {
+      let valA = a[sortBy], valB = b[sortBy];
+      if (sortBy === 'created_at') { valA = new Date(valA); valB = new Date(valB); }
+      if (valA < valB) return sortDir === 'asc' ? -1 : 1;
+      if (valA > valB) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return result;
+  }, [leads, search, pitchFilter, statusFilter, sortBy, sortDir]);
+
+  function toggleSort(field) {
+    if (sortBy === field) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    else { setSortBy(field); setSortDir('desc'); }
+  }
+
+  const totalLeads = Object.values(counts).reduce((a, b) => a + b, 0);
+  const calledCount = leads.filter(l => l.latestCall).length;
+  const positiveCount = leads.filter(l => l.latestCall?.outcome === 'positive').length;
+
   return (
     <div className="page">
-      <Link href="/" style={{ fontSize: 13, color: 'var(--indigo)', textDecoration: 'none' }}>&larr; Back to dashboard</Link>
-      <h1 style={{ marginTop: 12 }}>Find leads</h1>
-      <p className="sub">Pick a platform, industry, and area. Google Maps checks website/reach automatically; social platforms search public, indexed profiles.</p>
+      <h1>Lead generation dashboard</h1>
+      <p className="sub">Live data from Supabase — updates automatically as the collector and call agent run.</p>
 
-      <div className="tabs" style={{ marginBottom: 18 }}>
-        {PLATFORMS.map(p => (
-          <button key={p.key} className={`tab ${platform === p.key ? 'active' : ''}`} onClick={() => setPlatform(p.key)}>{p.label}</button>
+      <Link href="/find-leads" className="call-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 22, marginRight: 8, textDecoration: 'none' }}>
+        <SearchIcon size={14} /> Find Leads
+      </Link>
+      <Link href="/add-lead" className="call-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 22, marginRight: 8, textDecoration: 'none', background: 'var(--indigo)' }}>
+        <UserPlus size={14} /> Add Lead Manually
+      </Link>
+      <button
+        className="call-btn"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginBottom: 22, background: 'var(--navy-950)' }}
+        onClick={() => exportToCsv(`leads_${activeSource}.csv`, filteredLeads.map(l => ({
+          business_name: l.business_name, country: l.country, city: l.city, industry: l.keyword_matched,
+          pitch_type: l.pitch_type, phone: l.phone, email: l.email, website: l.website, review_count: l.review_count,
+          status: l.status, call_outcome: l.latestCall?.outcome || l.latestCall?.status || 'not_called',
+        })))}
+      >
+        <Download size={14} /> Export CSV
+      </button>
+
+      <div className="metrics">
+        <div className="metric m-navy"><div className="label">Total leads</div><div className="value">{totalLeads}</div></div>
+        <div className="metric m-indigo"><div className="label">Called ({SOURCES.find(s => s.key === activeSource).label})</div><div className="value">{calledCount}</div></div>
+        <div className="metric m-teal"><div className="label">Positive responses</div><div className="value">{positiveCount}</div></div>
+      </div>
+
+      {todayTasks.length > 0 && (
+        <div className="panel" style={{ marginBottom: 22, borderColor: 'var(--signal)', background: 'var(--signal-dim)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontWeight: 600, fontSize: 13.5 }}>
+            <Clock size={15} color="var(--signal)" /> Today's follow-ups ({todayTasks.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {todayTasks.map(t => (
+              <Link key={t.id} href={`/leads/${t.id}`} style={{ fontSize: 13, color: 'var(--ink)', textDecoration: 'none', display: 'flex', justifyContent: 'space-between' }}>
+                <span>{t.business_name}</span>
+                <span className="mono" style={{ color: 'var(--ink-muted)' }}>{new Date(t.next_action_at).toLocaleString()}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="tabs">
+        {SOURCES.map(s => (
+          <button key={s.key} className={`tab ${activeSource === s.key ? 'active' : ''}`} onClick={() => setActiveSource(s.key)}>
+            {s.label} <span className="count">({counts[s.key] ?? 0})</span>
+          </button>
         ))}
       </div>
 
-      <div className="panel" style={{ maxWidth: 480 }}>
-        <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Industry</label>
-          <select value={industry} onChange={e => setIndustry(e.target.value)} style={inputStyle}>
-            {INDUSTRIES.map(i => <option key={i.id} value={i.id}>{i.label}</option>)}
-            <option value="other">Other (type your own)</option>
-          </select>
-          {industry === 'other' && (
-            <input
-              type="text" placeholder="e.g. Interior Design Studios"
-              value={customIndustry} onChange={e => setCustomIndustry(e.target.value)}
-              style={{ ...inputStyle, marginTop: 8 }}
-            />
-          )}
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>Country</label>
-          <select value={countryName} onChange={e => { setCountryName(e.target.value); setCity(''); setArea(''); }} style={inputStyle}>
-            {COUNTRIES.map(c => <option key={c.code} value={c.name}>{c.name}</option>)}
-          </select>
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <label style={labelStyle}>City</label>
-          <AutocompleteInput
-            value={city}
-            onChange={setCity}
-            placeholder="Start typing a city..."
-            types="(cities)"
-            countryCode={countryCode}
-          />
-        </div>
-
-        {isGoogle && (
-          <div style={{ display: 'flex', gap: 10, marginBottom: 18 }}>
-            <div style={{ flex: 2 }}>
-              <label style={labelStyle}>Area (optional)</label>
-              <AutocompleteInput
-                value={area}
-                onChange={setArea}
-                placeholder="e.g. Bhatti Chowk"
-                types="geocode"
-                countryCode={countryCode}
-                disabled={!city}
-              />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Radius (km)</label>
-              <input type="number" min="1" max="50" value={radiusKm} onChange={e => setRadiusKm(e.target.value)} style={inputStyle} disabled={!area} />
-            </div>
-          </div>
-        )}
-
-        {!isGoogle && (
-          <p style={{ fontSize: 11.5, color: 'var(--ink-muted)', marginBottom: 18 }}>
-            Searches public {PLATFORMS.find(p => p.key === platform).label} profiles indexed by Google. Contact info is only found if the business listed it publicly on their profile.
-          </p>
-        )}
-
-        <button className="call-btn" style={{ width: '100%', padding: '10px 0' }} onClick={handleFindLeads} disabled={loading || !city}>
-          {loading ? 'Searching...' : 'Find Leads'}
-        </button>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <input
+          type="text" placeholder="Search business name..."
+          value={search} onChange={e => setSearch(e.target.value)}
+          style={{ padding: '7px 10px', border: '0.5px solid var(--border)', borderRadius: 6, fontSize: 13, minWidth: 200 }}
+        />
+        <select value={pitchFilter} onChange={e => setPitchFilter(e.target.value)} style={selectStyle}>
+          <option value="">All pitch types</option>
+          {pitchOptions.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={selectStyle}>
+          <option value="">All call outcomes</option>
+          <option value="not_called">Not called</option>
+          <option value="positive">Positive</option>
+          <option value="negative">Negative</option>
+          <option value="callback_requested">Callback requested</option>
+          <option value="completed">Completed</option>
+        </select>
       </div>
 
-      {error && <div style={{ marginTop: 16, color: 'var(--rose)' }}>Error: {error}</div>}
-
-      {result && (
-        <div style={{ marginTop: 20 }}>
-          <p><strong>{result.inserted}</strong> new leads added (out of {result.found} found, duplicates skipped).</p>
-          {result.results?.length > 0 && (
-            <table>
-              <thead><tr><th>Business</th><th>{isGoogle ? 'Pitch type' : 'Contact info found'}</th></tr></thead>
-              <tbody>
-                {result.results.map((r, i) => (
-                  <tr key={i}>
-                    <td>{r.name}</td>
-                    <td>{isGoogle ? r.pitchType : [r.hasEmail && 'Email', r.hasPhone && 'Phone'].filter(Boolean).join(', ') || 'None found'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          <p style={{ marginTop: 12 }}><Link href="/" style={{ color: 'var(--indigo)' }}>Go to dashboard to see them &rarr;</Link></p>
-        </div>
+      {loading ? (
+        <div className="empty">Loading...</div>
+      ) : filteredLeads.length === 0 ? (
+        <div className="empty">No leads match these filters.</div>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th style={sortHeaderStyle} onClick={() => toggleSort('business_name')}>Business {sortBy === 'business_name' && (sortDir === 'asc' ? '↑' : '↓')}</th>
+              <th style={sortHeaderStyle} onClick={() => toggleSort('country')}>Country / City {sortBy === 'country' && (sortDir === 'asc' ? '↑' : '↓')}</th>
+              <th style={sortHeaderStyle} onClick={() => toggleSort('keyword_matched')}>Industry {sortBy === 'keyword_matched' && (sortDir === 'asc' ? '↑' : '↓')}</th>
+              <th>Gap / Pitch</th>
+              <th style={sortHeaderStyle} onClick={() => toggleSort('review_count')}>Reviews {sortBy === 'review_count' && (sortDir === 'asc' ? '↑' : '↓')}</th>
+              <th>Lead status</th>
+              <th>Call outcome</th>
+              <th>Contact</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredLeads.map(lead => (
+              <tr key={lead.id}>
+                <td><Link href={`/leads/${lead.id}`} style={{ color: 'var(--ink)', fontWeight: 500, textDecoration: 'none' }}>{lead.business_name}</Link></td>
+                <td>{lead.city ? `${lead.city}, ` : ''}{lead.country}</td>
+                <td>{lead.keyword_matched}</td>
+                <td>{gapBadge(lead.pitch_type)}</td>
+                <td className="mono">{lead.review_count ?? '-'}</td>
+                <td>
+                  <select
+                    value={lead.status || 'new'}
+                    onChange={e => handleStatusChange(lead, e.target.value)}
+                    style={{ ...selectStyle, padding: '4px 6px', fontSize: 12 }}
+                  >
+                    {Object.entries(STATUS_LABELS).map(([val, label]) => <option key={val} value={val}>{label}</option>)}
+                  </select>
+                </td>
+                <td>{statusBadge(lead)}</td>
+                <td className="mono">{lead.phone || '-'}</td>
+                <td>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="call-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 10px' }} disabled={!lead.phone || callingId === lead.id} onClick={() => handleCall(lead)}>
+                      <PhoneCall size={12} /> {callingId === lead.id ? '...' : 'Call'}
+                    </button>
+                    {whatsappLink(lead) && (
+                      <a href={whatsappLink(lead)} target="_blank" rel="noreferrer" className="call-btn" style={{ background: '#25D366', display: 'inline-flex', alignItems: 'center', padding: '6px 10px', textDecoration: 'none' }}>
+                        <MessageCircle size={12} />
+                      </a>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
 }
 
-const labelStyle = { display: 'block', fontSize: 12, color: 'var(--ink-muted)', marginBottom: 4 };
-const inputStyle = {
-  width: '100%', padding: '8px 10px', border: '0.5px solid var(--border)',
-  borderRadius: 6, fontSize: 13, background: 'white', boxSizing: 'border-box',
-};
+const selectStyle = { padding: '7px 10px', border: '0.5px solid var(--border)', borderRadius: 6, fontSize: 13, background: 'white' };
+const sortHeaderStyle = { cursor: 'pointer', userSelect: 'none' };
