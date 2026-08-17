@@ -6,9 +6,15 @@ import { CheckCircle2, XCircle, ExternalLink } from 'lucide-react';
 const INTEGRATIONS = [
   {
     key: 'google_places', name: 'Google Places / Geocoding / PageSpeed',
-    desc: 'Powers Find Leads, city/area autocomplete, and SEO audit.',
+    desc: 'Powers Find Leads (Google Maps), city/area autocomplete, and SEO audit.',
     configureUrl: 'https://console.cloud.google.com/apis/credentials',
     envVar: 'GOOGLE_API_KEY',
+  },
+  {
+    key: 'custom_search', name: 'Google Custom Search (social leads)',
+    desc: 'Finds LinkedIn/Facebook/Instagram/TikTok leads via public indexed profiles.',
+    configureUrl: 'https://programmablesearchengine.google.com',
+    envVar: 'GOOGLE_CSE_ID',
   },
   {
     key: 'supabase', name: 'Supabase database',
