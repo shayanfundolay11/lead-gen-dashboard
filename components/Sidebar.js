@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, Search, BarChart3, PhoneCall, UserPlus, FileText, Settings } from 'lucide-react';
+import { LayoutGrid, Search, BarChart3, PhoneCall, UserPlus, FileText, Settings, CalendarDays } from 'lucide-react';
 
 const LINKS = [
   { href: '/', label: 'Dashboard', icon: LayoutGrid },
   { href: '/find-leads', label: 'Find Leads', icon: Search },
   { href: '/add-lead', label: 'Add Lead Manually', icon: UserPlus },
+  { href: '/calendar', label: 'Calendar', icon: CalendarDays },
   { href: '/reports', label: 'Reports', icon: BarChart3 },
   { href: '/templates', label: 'Templates', icon: FileText },
   { href: '/settings', label: 'Settings', icon: Settings },
