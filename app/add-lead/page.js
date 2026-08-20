@@ -4,8 +4,10 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { supabase } from '../../lib/supabaseClient';
 import { COUNTRIES } from '../../lib/countries';
+import { useOrgId } from '../../lib/useOrgId';
 
 export default function AddLead() {
+  const orgId = useOrgId();
   const [source, setSource] = useState('linkedin');
   const [businessName, setBusinessName] = useState('');
   const [industry, setIndustry] = useState('');
@@ -24,6 +26,7 @@ export default function AddLead() {
     setSaving(true);
     setError(null);
     const { error: insertError } = await supabase.from('leads').insert({
+      organization_id: orgId,
       source, country, city, keyword_matched: industry || 'Manually added',
       business_name: businessName, phone: phone || null, email: email || null,
       website: website || null, pitch_type: pitchType,

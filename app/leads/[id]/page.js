@@ -6,9 +6,11 @@ import Link from 'next/link';
 import { supabase } from '../../../lib/supabaseClient';
 import { generatePitchScript } from '../../../lib/generatePitch';
 import { applyTemplate } from '../../../lib/templates';
+import { useOrgId } from '../../../lib/useOrgId';
 
 export default function LeadDetail() {
   const { id } = useParams();
+  const orgId = useOrgId();
   const [lead, setLead] = useState(null);
   const [calls, setCalls] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -26,9 +28,10 @@ export default function LeadDetail() {
   async function handleRunAudit() {
     setAuditing(true);
     try {
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/seo-audit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify({ leadId: id }),
       });
       const data = await res.json();
@@ -64,6 +67,7 @@ export default function LeadDetail() {
   async function handleLogCall() {
     setSaving(true);
     const { error } = await supabase.from('calls').insert({
+      organization_id: orgId,
       lead_id: id,
       status: logStatus,
       outcome: logOutcome,
@@ -103,25 +107,6 @@ export default function LeadDetail() {
   async function handleNextActionChange(value) {
     await supabase.from('leads').update({ next_action_at: value ? new Date(value).toISOString() : null }).eq('id', id);
     setLead(prev => ({ ...prev, next_action_at: value ? new Date(value).toISOString() : null }));
-  }
-
-  async function handleCall() {
-    setCalling(true);
-    try {
-      const res = await fetch('/api/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, phone: lead.phone }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        alert('Call could not start: ' + (err.error || 'unknown error'));
-      }
-    } catch (e) {
-      alert('Call request failed: ' + e.message);
-    } finally {
-      setCalling(false);
-    }
   }
 
   if (loading) return <div className="page"><div className="empty">Loading...</div></div>;
@@ -186,9 +171,9 @@ export default function LeadDetail() {
       </div>
 
       <div style={{ display: 'flex', gap: 10, marginBottom: 24, flexWrap: 'wrap' }}>
-        <button className="call-btn" disabled={!lead.phone || calling} onClick={handleCall}>
-          {calling ? 'Starting call...' : 'Call now'}
-        </button>
+        <a className="call-btn" style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', opacity: lead.phone ? 1 : 0.5, pointerEvents: lead.phone ? 'auto' : 'none' }} href={`tel:${lead.phone}`}>
+          Call now
+        </a>
         {lead.phone && (
           <a
             className="call-btn"

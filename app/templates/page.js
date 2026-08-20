@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 import { applyTemplate } from '../../lib/templates';
+import { useOrgId } from '../../lib/useOrgId';
 
 const PITCH_TYPES = ['Website pitch', 'SEO / reach pitch', 'Social Media Marketing pitch', 'General pitch'];
 const CHANNELS = [
@@ -13,6 +14,7 @@ const CHANNELS = [
 ];
 
 export default function Templates() {
+  const orgId = useOrgId();
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activePitch, setActivePitch] = useState(PITCH_TYPES[0]);
@@ -54,6 +56,7 @@ export default function Templates() {
     const existing = getVariants(channel, language);
     const nextNum = existing.length + 1;
     const { error } = await supabase.from('templates').insert({
+      organization_id: orgId,
       pitch_type: activePitch, channel, language,
       variant_label: `Variation ${nextNum}`,
       body: existing[0]?.body || 'Write your new variation here...',

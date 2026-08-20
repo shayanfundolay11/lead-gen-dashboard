@@ -1,6 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+import { getUserScopedClient } from '../../../lib/authServer';
 
 function originOf(url) {
   try { return new URL(url).origin; } catch { return null; }
@@ -85,6 +83,7 @@ async function checkPageSpeed(url, apiKey) {
 }
 
 export async function POST(req) {
+  const supabase = getUserScopedClient(req);
   const { leadId } = await req.json();
   const apiKey = process.env.GOOGLE_API_KEY;
 

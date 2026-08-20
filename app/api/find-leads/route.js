@@ -1,13 +1,9 @@
-import { createClient } from '@supabase/supabase-js';
 import { resolveIndustry } from '../../../lib/industries';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-);
+import { PLAN_LIMITS } from '../../../lib/planLimits';
+import { getUserScopedClient, getProfile } from '../../../lib/authServer';
 
 const BASE = 'https://maps.googleapis.com/maps/api';
-const REACH_THRESHOLD = 15; // fewer Google reviews than this = "low reach", used as a free proxy
+const REACH_THRESHOLD = 15;
 
 async function geocode(country, city, area, apiKey) {
   const query = [area, city, country].filter(Boolean).join(', ');
@@ -18,7 +14,7 @@ async function geocode(country, city, area, apiKey) {
   return data.results[0].geometry.location;
 }
 
-async function searchPlaces(searchTerm, country, city, area, radiusKm, center, apiKey) {
+async function searchPlaces(searchTerm, country, city, area, radiusKm, center, apiKey, limit) {
   const locationText = area ? `${area}, ${city}, ${country}` : `${city}, ${country}`;
   const params = new URLSearchParams({ query: `${searchTerm} in ${locationText}`, key: apiKey });
   if (area) {
@@ -30,7 +26,7 @@ async function searchPlaces(searchTerm, country, city, area, radiusKm, center, a
   if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
     throw new Error(`Places search failed: ${data.status} ${data.error_message || ''}`);
   }
-  return (data.results || []).slice(0, 20); // capped to keep this request fast
+  return (data.results || []).slice(0, limit);
 }
 
 async function getDetails(placeId, apiKey) {
@@ -40,10 +36,6 @@ async function getDetails(placeId, apiKey) {
   return data.status === 'OK' ? data.result : null;
 }
 
-// Best-effort only: Google Maps never provides email addresses, this is not part of its
-// data at all. If the business has a website, we try to find a public email on the
-// homepage. Many sites use contact forms instead of a listed email, so this often
-// returns nothing — that's expected, not a bug.
 async function scrapeEmailFromWebsite(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
@@ -52,13 +44,10 @@ async function scrapeEmailFromWebsite(url) {
     const filtered = matches.filter(m => !/\.(png|jpg|jpeg|gif|svg|webp)$/i.test(m) && !m.includes('example.com') && !m.includes('sentry.io'));
     return filtered[0] || null;
   } catch {
-    return null; // site blocked scraping, timed out, or has no email listed — expected sometimes
+    return null;
   }
 }
 
-// This is the core fix: pitch type is decided PER BUSINESS from its own website/review
-// data, not from what the user searched for. A restaurant search can return some
-// businesses that need a website and others that just need SEO — both in the same run.
 function detectPitch(details) {
   const hasWebsite = Boolean(details.website);
   const reviewCount = details.user_ratings_total || 0;
@@ -68,20 +57,45 @@ function detectPitch(details) {
 }
 
 export async function POST(req) {
+  const supabase = getUserScopedClient(req);
+  const profile = await getProfile(supabase);
+  if (!profile) return Response.json({ error: 'Not logged in' }, { status: 401 });
+
+  const org = profile.organizations;
+  const limits = PLAN_LIMITS[org.plan];
+
+  if (org.plan === 'demo' && org.demo_expires_at && new Date(org.demo_expires_at) < new Date()) {
+    return Response.json({ error: 'Your demo has expired. Please upgrade to continue.' }, { status: 403 });
+  }
+
+  // Reset the daily search counter if it's a new day
+  const today = new Date().toISOString().slice(0, 10);
+  let searchesToday = org.searches_today;
+  if (org.searches_reset_at !== today) {
+    searchesToday = 0;
+    await supabase.from('organizations').update({ searches_today: 0, searches_reset_at: today }).eq('id', org.id);
+  }
+  if (limits.searchesPerDay !== null && searchesToday >= limits.searchesPerDay) {
+    return Response.json({ error: `Daily search limit reached (${limits.searchesPerDay} for the ${limits.label} plan). Try again tomorrow or upgrade.` }, { status: 403 });
+  }
+
+  if (org.plan === 'demo' && limits.totalLeadsCap !== null) {
+    const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('organization_id', org.id);
+    if (count >= limits.totalLeadsCap) {
+      return Response.json({ error: `Demo limit reached (${limits.totalLeadsCap} leads). Please upgrade to continue.` }, { status: 403 });
+    }
+  }
+
   const { industry, country, city, area, radiusKm } = await req.json();
   const apiKey = process.env.GOOGLE_API_KEY;
 
-  if (!apiKey) {
-    return Response.json({ error: 'GOOGLE_API_KEY is not set in Vercel environment variables yet' }, { status: 500 });
-  }
-  if (!country || !city) {
-    return Response.json({ error: 'Country and city are required' }, { status: 400 });
-  }
+  if (!apiKey) return Response.json({ error: 'GOOGLE_API_KEY is not set yet' }, { status: 500 });
+  if (!country || !city) return Response.json({ error: 'Country and city are required' }, { status: 400 });
 
   try {
     const industryDef = resolveIndustry(industry);
     const center = area ? await geocode(country, city, area, apiKey) : null;
-    const places = await searchPlaces(industryDef.searchTerm, country, city, area, radiusKm, center, apiKey);
+    const places = await searchPlaces(industryDef.searchTerm, country, city, area, radiusKm, center, apiKey, limits.leadsPerSearch);
 
     let inserted = 0;
     const results = [];
@@ -90,23 +104,18 @@ export async function POST(req) {
       const details = await getDetails(place.place_id, apiKey);
       if (!details) continue;
 
-      const { data: existing } = await supabase
-        .from('leads')
-        .select('id')
-        .eq('business_name', details.name)
-        .eq('country', country)
-        .limit(1);
-      if (existing && existing.length > 0) continue; // skip duplicates
+      const { data: existing } = await supabase.from('leads').select('id').eq('business_name', details.name).eq('country', country).eq('organization_id', org.id).limit(1);
+      if (existing && existing.length > 0) continue;
 
       const pitchType = detectPitch(details);
       const email = details.website ? await scrapeEmailFromWebsite(details.website) : null;
 
       const { error } = await supabase.from('leads').insert({
+        organization_id: org.id,
         source: 'google',
-        country,
-        city,
+        country, city,
         area: area || null,
-        keyword_matched: industryDef.label, // industry, shown in the "Keyword" column
+        keyword_matched: industryDef.label,
         business_name: details.name,
         phone: details.formatted_phone_number || details.international_phone_number || null,
         website: details.website || null,
@@ -121,6 +130,8 @@ export async function POST(req) {
         results.push({ name: details.name, pitchType });
       }
     }
+
+    await supabase.from('organizations').update({ searches_today: searchesToday + 1 }).eq('id', org.id);
 
     return Response.json({ success: true, found: places.length, inserted, results });
   } catch (e) {

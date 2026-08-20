@@ -1,5 +1,5 @@
 import './globals.css';
-import Sidebar from '../components/Sidebar';
+import AppShell from '../components/AppShell';
 
 export const metadata = {
   title: 'Lead Gen Dashboard',
@@ -10,10 +10,7 @@ export default function RootLayout({ children }) {
   return (
     <html lang="en">
       <body>
-        <div className="app-shell">
-          <Sidebar />
-          <div className="main">{children}</div>
-        </div>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

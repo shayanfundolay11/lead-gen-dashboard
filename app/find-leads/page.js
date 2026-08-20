@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { INDUSTRIES } from '../../lib/industries';
 import { COUNTRIES } from '../../lib/countries';
 import AutocompleteInput from '../../components/AutocompleteInput';
+import { supabase } from '../../lib/supabaseClient';
 
 const PLATFORMS = [
   { key: 'google', label: 'Google Maps' },
@@ -40,9 +41,10 @@ export default function FindLeads() {
         ? { industry: industry === 'other' ? customIndustry : industry, country: countryName, city, area, radiusKm }
         : { platform, industry: industryValue, country: countryName, city };
 
+      const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
         body: JSON.stringify(body),
       });
       const data = await res.json();
