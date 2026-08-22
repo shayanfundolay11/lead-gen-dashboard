@@ -5,24 +5,27 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGri
 import { Download } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
 import { exportToCsv } from '../../lib/exportCsv';
+import { useOrgId } from '../../lib/useOrgId';
 
 const COLORS = ['#ff6b45', '#5b57e0', '#1a9c76', '#e8a13a', '#e0495f', '#12172b'];
 
 export default function Reports() {
+  const orgId = useOrgId();
   const [leads, setLeads] = useState([]);
   const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!orgId) return;
     async function load() {
-      const { data: leadData } = await supabase.from('leads').select('*');
-      const { data: callData } = await supabase.from('calls').select('*');
+      const { data: leadData } = await supabase.from('leads').select('*').eq('organization_id', orgId);
+      const { data: callData } = await supabase.from('calls').select('*').eq('organization_id', orgId);
       setLeads(leadData || []);
       setCalls(callData || []);
       setLoading(false);
     }
     load();
-  }, []);
+  }, [orgId]);
 
   if (loading) return <div className="page"><div className="empty">Loading...</div></div>;
 

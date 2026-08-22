@@ -26,9 +26,10 @@ export async function POST(req) {
   if (!profile) return Response.json({ error: 'Not logged in' }, { status: 401 });
 
   const org = profile.organizations;
-  const limits = PLAN_LIMITS[org.plan];
+  const isSuperAdmin = profile.role === 'super_admin';
+  const limits = isSuperAdmin ? { leadsPerSearch: 50, searchesPerDay: null, totalLeadsCap: null, label: 'Super Admin' } : PLAN_LIMITS[org.plan];
 
-  if (org.plan === 'demo' && org.demo_expires_at && new Date(org.demo_expires_at) < new Date()) {
+  if (!isSuperAdmin && org.plan === 'demo' && org.demo_expires_at && new Date(org.demo_expires_at) < new Date()) {
     return Response.json({ error: 'Your demo has expired. Please upgrade to continue.' }, { status: 403 });
   }
 
@@ -38,7 +39,7 @@ export async function POST(req) {
     searchesToday = 0;
     await supabase.from('organizations').update({ searches_today: 0, searches_reset_at: today }).eq('id', org.id);
   }
-  if (limits.searchesPerDay !== null && searchesToday >= limits.searchesPerDay) {
+  if (!isSuperAdmin && limits.searchesPerDay !== null && searchesToday >= limits.searchesPerDay) {
     return Response.json({ error: `Daily search limit reached (${limits.searchesPerDay} for the ${limits.label} plan).` }, { status: 403 });
   }
 

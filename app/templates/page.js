@@ -25,12 +25,13 @@ export default function Templates() {
   const [previewIndustry, setPreviewIndustry] = useState('restaurant');
 
   async function loadTemplates() {
-    const { data } = await supabase.from('templates').select('*').order('channel').order('language').order('variant_label');
+    if (!orgId) return;
+    const { data } = await supabase.from('templates').select('*').eq('organization_id', orgId).order('channel').order('language').order('variant_label');
     setTemplates(data || []);
     setLoading(false);
   }
 
-  useEffect(() => { loadTemplates(); }, []);
+  useEffect(() => { loadTemplates(); }, [orgId]);
 
   function getVariants(channel, language) {
     return templates.filter(t => t.pitch_type === activePitch && t.channel === channel && t.language === language);

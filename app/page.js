@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Search as SearchIcon, PhoneCall, Download, UserPlus, MessageCircle, Clock } from 'lucide-react';
 import { supabase } from '../lib/supabaseClient';
 import { exportToCsv } from '../lib/exportCsv';
+import { useOrgId } from '../lib/useOrgId';
 
 const SOURCES = [
   { key: 'google', label: 'Google' },
@@ -19,6 +20,7 @@ const STATUS_LABELS = {
 };
 
 export default function Dashboard() {
+  const orgId = useOrgId();
   const [activeSource, setActiveSource] = useState('google');
   const [counts, setCounts] = useState({});
   const [leads, setLeads] = useState([]);
@@ -33,20 +35,23 @@ export default function Dashboard() {
   const [sortDir, setSortDir] = useState('desc');
 
   const loadCounts = useCallback(async () => {
+    if (!orgId) return;
     const results = {};
     for (const s of SOURCES) {
-      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('source', s.key);
+      const { count } = await supabase.from('leads').select('*', { count: 'exact', head: true }).eq('source', s.key).eq('organization_id', orgId);
       results[s.key] = count || 0;
     }
     setCounts(results);
-  }, []);
+  }, [orgId]);
 
   const loadLeads = useCallback(async (source) => {
+    if (!orgId) return;
     setLoading(true);
     const { data, error } = await supabase
       .from('leads')
       .select('*, calls(status, outcome, called_at, scheduled_callback_at)')
       .eq('source', source)
+      .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
 
     if (!error && data) {
@@ -57,42 +62,23 @@ export default function Dashboard() {
       setLeads(withLatestCall);
     }
     setLoading(false);
-  }, []);
+  }, [orgId]);
 
   const loadTodayTasks = useCallback(async () => {
-    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+    if (!orgId) return;
     const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
     const { data } = await supabase
       .from('leads')
       .select('*')
+      .eq('organization_id', orgId)
       .not('next_action_at', 'is', null)
       .lte('next_action_at', endOfToday.toISOString())
       .order('next_action_at', { ascending: true });
     setTodayTasks(data || []);
-  }, []);
+  }, [orgId]);
 
   useEffect(() => { loadCounts(); loadTodayTasks(); }, [loadCounts, loadTodayTasks]);
   useEffect(() => { loadLeads(activeSource); }, [activeSource, loadLeads]);
-
-  async function handleCall(lead) {
-    setCallingId(lead.id);
-    try {
-      const res = await fetch('/api/call', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leadId: lead.id, phone: lead.phone }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        alert('Call could not start: ' + (err.error || 'unknown error'));
-      }
-      await loadLeads(activeSource);
-    } catch (e) {
-      alert('Call request failed: ' + e.message);
-    } finally {
-      setCallingId(null);
-    }
-  }
 
   async function handleStatusChange(lead, newStatus) {
     await supabase.from('leads').update({ status: newStatus }).eq('id', lead.id);
@@ -265,9 +251,9 @@ export default function Dashboard() {
                 <td className="mono">{lead.phone || '-'}</td>
                 <td>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <button className="call-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 10px' }} disabled={!lead.phone || callingId === lead.id} onClick={() => handleCall(lead)}>
-                      <PhoneCall size={12} /> {callingId === lead.id ? '...' : 'Call'}
-                    </button>
+                    <a className="call-btn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 10px', textDecoration: 'none', opacity: lead.phone ? 1 : 0.5, pointerEvents: lead.phone ? 'auto' : 'none' }} href={`tel:${lead.phone}`}>
+                      <PhoneCall size={12} /> Call
+                    </a>
                     {whatsappLink(lead) && (
                       <a href={whatsappLink(lead)} target="_blank" rel="noreferrer" className="call-btn" style={{ background: '#25D366', display: 'inline-flex', alignItems: 'center', padding: '6px 10px', textDecoration: 'none' }}>
                         <MessageCircle size={12} />

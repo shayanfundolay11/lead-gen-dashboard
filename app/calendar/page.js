@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '../../lib/supabaseClient';
+import { useOrgId } from '../../lib/useOrgId';
 
 const VIEWS = ['month', 'week', 'day'];
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -19,19 +20,21 @@ function startOfWeek(d) {
 }
 
 export default function Calendar() {
+  const orgId = useOrgId();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState('month');
   const [anchor, setAnchor] = useState(new Date());
 
   useEffect(() => {
+    if (!orgId) return;
     async function load() {
-      const { data } = await supabase.from('leads').select('*').not('next_action_at', 'is', null);
+      const { data } = await supabase.from('leads').select('*').eq('organization_id', orgId).not('next_action_at', 'is', null);
       setLeads(data || []);
       setLoading(false);
     }
     load();
-  }, []);
+  }, [orgId]);
 
   function tasksOn(date) {
     return leads.filter(l => sameDay(new Date(l.next_action_at), date))
